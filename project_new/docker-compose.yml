@@ -1,0 +1,76 @@
+
+version: "3.9"
+
+services:
+  # ==========================================
+  # 1. Agent 核心服务
+  # ==========================================
+  agent-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: langgraph-agent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - VECTOR_DB_HOST=qdrant
+      # ★ 修复：字段名要与 config.py 对齐，原来是 LLM_BASE_URL（无效，被 pydantic 忽略）
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    # ★ 新增：让容器内 host.docker.internal 在 Linux Docker 上也能解析宿主机
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - agent-network
+    volumes:
+      - ./model_cache:/root/.cache/huggingface
+      - .:/app
+
+  # ==========================================
+  # 2. Redis 缓存/状态管理（修复：使用 redis-stack 包含 RediSearch）
+  # ==========================================
+  redis:
+    image: redis/redis-stack:latest
+    container_name: agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agent-network
+
+  # ==========================================
+  # 3. Qdrant 向量数据库
+  # ==========================================
+  qdrant:
+    image: qdrant/qdrant:v1.9.0
+    container_name: agent-vector-db
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - agent-network
+
+# 持久化卷定义
+volumes:
+  redis-data:
+  qdrant-data:
+
+# 自定义网络
+networks:
+  agent-network:
+    driver: bridge
